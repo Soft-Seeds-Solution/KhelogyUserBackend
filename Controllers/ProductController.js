@@ -4,6 +4,7 @@ import Category from "../Modules/Category.js";
 import errorHandling from "../Middlewares/ErrorHandling.js";
 import Cloudinary from "../Cloudinary.js";
 import uploadFile from "../Middlewares/MultiUploader.js";
+import User from "../Modules/User.js";
 
 const router = express.Router();
 
@@ -22,6 +23,20 @@ const refreshCache = async () => {
     } catch (err) {
         console.log("❌ Cache refresh failed:", err.message);
     }
+};
+
+const removePendingFields = (game) => {
+
+    const gameObj = game.toObject
+        ? game.toObject()
+        : game;
+
+    delete gameObj.pendingChanges;
+    delete gameObj.pendingBy;
+    delete gameObj.pendingAt;
+    delete gameObj.publishedByAdmin;
+
+    return gameObj;
 };
 
 router.post(
@@ -172,70 +187,120 @@ router.get(
     "/featured-games",
     errorHandling(async (req, res) => {
 
-        const now = Date.now();
-
         const featuredGames = await Products.find(
             { featureGame: "Yes" },
             "title thumbnail"
         ).lean();
 
-        res.status(200).json(featuredGames);
+        const safeGames =
+            featuredGames.map(removePendingFields);
+
+        res.status(200).json(safeGames);
+
     })
 );
 
-router.get("/uploadedd-games", errorHandling(async (req, res) => {
-    const uploadedGames = await Products.find()
-        .populate("categories", "category ancestors catUrl")
-        .populate("userId")
-        .populate("gameTags");
+router.get(
+    "/uploadedd-games",
+    errorHandling(async (req, res) => {
 
-    const formattedGames = uploadedGames.map(game => {
-        const sortedCategories = [...game.categories].sort(
-            (a, b) => a.ancestors.length - b.ancestors.length
-        );
+        const uploadedGames = await Products.find()
+            .populate("categories", "category ancestors catUrl")
+            .populate("userId")
+            .populate("gameTags");
 
-        return {
-            ...game.toObject(),
-            categories: sortedCategories
-        };
-    });
+        const formattedGames = uploadedGames.map(game => {
 
-    // ✅ Force Cloudflare caching
-    // res.set("Cache-Control", "public, s-maxage=86400, stale-while-revalidate=3600");
-    res.json(formattedGames);
-}));
-// 📁 routes/gameRoutes.js
+            const sortedCategories =
+                [...game.categories].sort(
+                    (a, b) =>
+                        a.ancestors.length -
+                        b.ancestors.length
+                );
+
+            // REMOVE PENDING DATA
+            const safeGame =
+                removePendingFields(game);
+
+            return {
+                ...safeGame,
+                categories: sortedCategories
+            };
+        });
+
+        res.json(formattedGames);
+
+    })
+);
+
+router.get(
+    "/uploadedd-games-with-pending-data",
+    errorHandling(async (req, res) => {
+
+        const uploadedGames = await Products.find({
+            pendingChanges: { $ne: null }
+        })
+            .populate("categories", "category ancestors catUrl")
+            .populate("userId")
+            .populate("gameTags");
+
+        const formattedGames = uploadedGames.map(game => {
+            const sortedCategories = [...game.categories].sort(
+                (a, b) => a.ancestors.length - b.ancestors.length
+            );
+
+            return {
+                ...game.toObject(),
+                categories: sortedCategories
+            };
+        });
+
+        res.json(formattedGames);
+
+    })
+);
 
 router.get(
     "/top-liked-games",
     errorHandling(async (req, res) => {
+
         const topLikesGames = await Products.find({
             status: { $nin: ["Pending", "Rejected"] },
         })
             .populate("categoryId")
-            .populate("userId").populate("gameTags")
-            .sort({ views: -1 }) // Sort by highest views first
-            .limit(20); // You can adjust limit as needed
+            .populate("userId")
+            .populate("gameTags")
+            .sort({ views: -1 })
+            .limit(20);
 
-        res.status(200).json(topLikesGames);
+        const safeGames =
+            topLikesGames.map(removePendingFields);
+
+        res.status(200).json(safeGames);
+
     })
 );
+
 router.get(
     "/top-viewed-games",
     errorHandling(async (req, res) => {
+
         const topLikesGames = await Products.find({
             status: { $nin: ["Pending", "Rejected"] },
         })
             .populate("categoryId")
-            .populate("userId").populate("gameTags")
-            .sort({ likes: -1 }) // Sort by highest views first
-            .limit(20); // You can adjust limit as needed
+            .populate("userId")
+            .populate("gameTags")
+            .sort({ likes: -1 })
+            .limit(20);
 
-        res.status(200).json(topLikesGames);
+        const safeGames =
+            topLikesGames.map(removePendingFields);
+
+        res.status(200).json(safeGames);
+
     })
 );
-
-// 📁 routes/gameRoutes.js
 
 router.get(
     "/unique-categories",
@@ -301,33 +366,63 @@ router.get("/unique-game-urls", errorHandling(async (req, res) => {
     res.status(200).json({ urls: uniqueUrls });
 }));
 
-router.get("/gameById/:id", errorHandling(async (req, res) => {
-    const game = await Products.findById(req.params.id).populate("categories", "category ancestors catUrl").populate("gameTags");
-    if (!game) {
-        return res.status(404).json({ message: "Game not found" });
-    }
-    const sortedCategories = game.categories.sort(
-        (a, b) => a.ancestors.length - b.ancestors.length
-    );
+router.get(
+    "/gameById/:id",
+    errorHandling(async (req, res) => {
 
-    game.categories = sortedCategories;
-    res.json(game);
-}));
+        const game = await Products.findById(req.params.id)
+            .populate("categories", "category ancestors catUrl")
+            .populate("gameTags");
 
-router.get("/gameByTitle/:title", async (req, res) => {
-    const title = req.params.title;
+        if (!game) {
+            return res.status(404).json({
+                message: "Game not found"
+            });
+        }
 
-    const game = await Products.findOne({ "title.en": title }).populate("gameTags");
+        const sortedCategories =
+            game.categories.sort(
+                (a, b) =>
+                    a.ancestors.length -
+                    b.ancestors.length
+            );
 
-    if (!game) {
-        return res.status(404).json({ message: "Game not found" });
-    }
+        // REMOVE PENDING CHANGES (VERY IMPORTANT)
+        const safeGame = removePendingFields(game);
 
-    // ✅ store in cache
-    cache[title] = game;
+        safeGame.categories = sortedCategories;
 
-    res.json(game);
-});
+        res.json(safeGame);
+
+    })
+);
+
+router.get(
+    "/gameByTitle/:title",
+    errorHandling(async (req, res) => {
+
+        const title = req.params.title;
+
+        const game = await Products.findOne({
+            "title.en": title
+        }).populate("gameTags");
+
+        if (!game) {
+            return res.status(404).json({
+                message: "Game not found"
+            });
+        }
+
+        // STORE IN CACHE (raw for internal use)
+        cache[title] = game;
+
+        // REMOVE PENDING FIELDS BEFORE SENDING
+        const safeGame = removePendingFields(game);
+
+        res.json(safeGame);
+
+    })
+);
 
 router.get("/home-data", async (req, res) => {
     try {
@@ -366,98 +461,203 @@ router.put(
         { name: "video", maxCount: 1 },
     ]),
     errorHandling(async (req, res) => {
-        const {
-            title,
-            shortDes,
-            description,
-            categoryIds,
-            gameUrl,
-            howToPlay,
-            whoCreated,
-            orientation,
-            featureGame,
-            recommended,
-            featureList,
-            controls,
-            gameTags,
-            faqs,
-            metaTitle,
-            metaDescription,
-            gameKeywords,
-        } = req.body;
 
         const gameId = req.params.id;
 
-        // Fetch existing game
         const existingGame = await Products.findById(gameId);
-        if (!existingGame) return res.status(404).json({ message: "Game not found" });
 
-        // Parse JSON fields if they are strings
-        const parsedTitle = typeof title === "string" ? JSON.parse(title) : title;
+        if (!existingGame) {
+            return res.status(404).json({
+                message: "Game not found"
+            });
+        }
+
+        // ======================
+        // PARSE INPUT DATA
+        // ======================
+        const parsedTitle =
+            typeof req.body.title === "string"
+                ? JSON.parse(req.body.title)
+                : req.body.title;
+
         const parsedShortDes =
-            typeof shortDes === "string" ? JSON.parse(shortDes) : shortDes;
+            typeof req.body.shortDes === "string"
+                ? JSON.parse(req.body.shortDes)
+                : req.body.shortDes;
+
         const parsedDescription =
-            typeof description === "string" ? JSON.parse(description) : description;
-        const parsedFaqs = typeof faqs === "string" ? JSON.parse(faqs) : faqs;
+            typeof req.body.description === "string"
+                ? JSON.parse(req.body.description)
+                : req.body.description;
+
+        const parsedFaqs =
+            typeof req.body.faqs === "string"
+                ? JSON.parse(req.body.faqs)
+                : req.body.faqs;
+
+        const parsedGameTags =
+            typeof req.body.gameTags === "string"
+                ? JSON.parse(req.body.gameTags)
+                : req.body.gameTags;
+
         const safeFaqs = Array.isArray(parsedFaqs) ? parsedFaqs : [];
-        const keywordsArray = gameKeywords
-            ? gameKeywords.split(",").map((k) => k.trim()).filter((k) => k)
+
+        // keywords
+        const keywordsArray = req.body.gameKeywords
+            ? req.body.gameKeywords.split(",").map(k => k.trim()).filter(Boolean)
             : [];
 
-        // Handle categories (simple check for not null/undefined)
+        // categories
         let allCategories = [];
-
-        if (categoryIds) {
+        if (req.body.categoryIds) {
             const parsedIds =
-                typeof categoryIds === "string"
-                    ? JSON.parse(categoryIds)
-                    : categoryIds;
+                typeof req.body.categoryIds === "string"
+                    ? JSON.parse(req.body.categoryIds)
+                    : req.body.categoryIds;
 
             if (Array.isArray(parsedIds)) {
-                allCategories = parsedIds.filter(id => id); // only selected
+                allCategories = parsedIds.filter(Boolean);
             }
         }
 
-        const parsedGameTags =
-            typeof gameTags === "string" ? JSON.parse(gameTags) : gameTags;
+        // ======================
+        // BUILD UPDATE OBJECT
+        // ======================
+        const updatedData = {};
 
-        // Build update object
-        let updatedData = {};
         if (parsedTitle) updatedData.title = parsedTitle;
         if (parsedShortDes) updatedData.shortDes = parsedShortDes;
         if (parsedDescription) updatedData.description = parsedDescription;
-        if (keywordsArray.length > 0) updatedData.gameKeywords = keywordsArray;
-        if (allCategories.length > 0) updatedData.categories = allCategories;
-        if (parsedGameTags && parsedGameTags.length > 0) {
-            updatedData.gameTags = parsedGameTags;
-        }
-        if (gameUrl) updatedData.gameUrl = gameUrl;
-        if (howToPlay) updatedData.howToPlay = howToPlay;
-        if (whoCreated) updatedData.whoCreated = whoCreated;
-        if (orientation) updatedData.orientation = orientation;
-        if (featureGame) updatedData.featureGame = featureGame;
-        if (recommended) updatedData.recommended = recommended;
-        if (featureList) updatedData.featureList = featureList;
-        if (controls) updatedData.controls = controls;
-        if (metaTitle) updatedData.metaTitle = metaTitle;
-        if (metaDescription) updatedData.metaDescription = metaDescription;
-        if (safeFaqs.length > 0) updatedData.faqs = safeFaqs;
+        if (keywordsArray.length) updatedData.gameKeywords = keywordsArray;
+        if (allCategories.length) updatedData.categories = allCategories;
+        if (parsedGameTags?.length) updatedData.gameTags = parsedGameTags;
+        if (req.body.gameUrl) updatedData.gameUrl = req.body.gameUrl;
+        if (req.body.howToPlay) updatedData.howToPlay = req.body.howToPlay;
+        if (req.body.whoCreated) updatedData.whoCreated = req.body.whoCreated;
+        if (req.body.orientation) updatedData.orientation = req.body.orientation;
+        if (req.body.featureGame) updatedData.featureGame = req.body.featureGame;
+        if (req.body.recommended) updatedData.recommended = req.body.recommended;
+        if (req.body.featureList) updatedData.featureList = req.body.featureList;
+        if (req.body.controls) updatedData.controls = req.body.controls;
+        if (req.body.metaTitle) updatedData.metaTitle = req.body.metaTitle;
+        if (req.body.metaDescription) updatedData.metaDescription = req.body.metaDescription;
+        if (safeFaqs.length) updatedData.faqs = safeFaqs;
 
-        // Handle files
+        // ======================
+        // FILES
+        // ======================
         if (req.files?.thumbnail?.[0]) {
-            const imgUpload = await Cloudinary.uploader.upload(req.files.thumbnail[0].path);
+            const imgUpload = await Cloudinary.uploader.upload(
+                req.files.thumbnail[0].path
+            );
             updatedData.thumbnail = imgUpload.secure_url;
         }
+
         if (req.files?.video?.[0]) {
-            const videoUpload = await Cloudinary.uploader.upload(req.files.video[0].path, {
-                resource_type: "video",
-            });
+            const videoUpload = await Cloudinary.uploader.upload(
+                req.files.video[0].path,
+                { resource_type: "video" }
+            );
             updatedData.video = videoUpload.secure_url;
         }
 
-        // Update game
-        const updatedGame = await Products.findByIdAndUpdate(gameId, updatedData, { new: true });
-        res.json(updatedGame);
+        // ======================
+        // ADMIN vs USER LOGIC
+        // ======================
+        const user = await User.findById(req.body.role);
+        const isAdmin = user?.role === "Admin";
+
+        // ✅ ADMIN: DIRECT UPDATE (LIVE CHANGE)
+        if (isAdmin) {
+
+            const updatedGame = await Products.findByIdAndUpdate(
+                gameId,
+                {
+                    ...updatedData,
+
+                    // clear pending once approved
+                    pendingChanges: null,
+                    publishedByAdmin: true,
+                    pendingBy: null,
+                    pendingAt: null
+                },
+                { new: true }
+            );
+
+            return res.json({
+                success: true,
+                message: "Game updated and published",
+                game: updatedGame
+            });
+        }
+
+        // ======================
+        // USER: SAVE AS PENDING ONLY
+        // ======================
+        existingGame.pendingChanges = updatedData;
+        existingGame.pendingBy = user.role || null;
+        existingGame.pendingAt = new Date();
+        existingGame.publishedByAdmin = false;
+
+        await existingGame.save();
+
+        return res.json({
+            success: true,
+            message: "Changes submitted for admin approval"
+        });
+
+    })
+);
+
+router.put(
+    "/approvePendingGame/:id",
+    errorHandling(async (req, res) => {
+
+        const gameId = req.params.id;
+
+        // =========================
+        // FIND GAME
+        // =========================
+        const existingGame = await Products.findById(gameId);
+
+        if (!existingGame) {
+            return res.status(404).json({
+                message: "Game not found"
+            });
+        }
+
+        // =========================
+        // CHECK PENDING CHANGES
+        // =========================
+        if (!existingGame.pendingChanges) {
+            return res.status(400).json({
+                message: "No pending changes found"
+            });
+        }
+
+        // =========================
+        // APPLY PENDING CHANGES
+        // =========================
+        Object.keys(existingGame.pendingChanges).forEach((key) => {
+            existingGame[key] = existingGame.pendingChanges[key];
+        });
+
+        // =========================
+        // CLEAR PENDING
+        // =========================
+        existingGame.pendingChanges = null;
+        existingGame.pendingBy = null;
+        existingGame.pendingAt = null;
+        existingGame.publishedByAdmin = true;
+
+        await existingGame.save();
+
+        return res.json({
+            success: true,
+            message: "Pending changes approved and published successfully",
+            game: existingGame
+        });
+
     })
 );
 

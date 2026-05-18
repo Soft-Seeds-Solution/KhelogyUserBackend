@@ -73,7 +73,27 @@ const productSchema = new Schema({
     type: Schema.Types.ObjectId,
     ref: "User"
   },
-  status: String
+  status: String,
+  pendingChanges: {
+    type: Object,
+    default: null
+  },
+
+  pendingBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    default: null
+  },
+
+  pendingAt: {
+    type: Date,
+    default: null
+  },
+
+  publishedByAdmin: {
+    type: Boolean,
+    default: true
+  },
 }, { timestamps: true });
 
 export default mongoose.model("Games", productSchema);
