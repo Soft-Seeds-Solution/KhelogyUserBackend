@@ -3,48 +3,154 @@ import errorHandling from "../Middlewares/ErrorHandling.js"
 import upload from "../Middlewares/ImgFilter.js";
 import cloudinary from "../Cloudinary.js";
 import Category from "../Modules/Category.js";
+import User from "../Modules/User.js";
 const router = express.Router();
 
-router.post("/addCategory", upload.single("logo"), errorHandling(async (req, res) => {
-    const { category, description, shortDes, parentId, catIndex, metaDes, metaTitle, keywords, catUrl } = req.body;
+const removePendingFields = (cat) => {
 
-    if (!category) return res.status(400).json({ message: "Please select at least category" })
+    const catObj = cat.toObject
+        ? cat.toObject()
+        : cat;
 
-    const existingCategory = await Category.findOne({
-        category: { $regex: new RegExp(`^${category.trim()}$`, "i") }
-    });
+    delete catObj.pendingChanges;
+    delete catObj.pendingBy;
+    delete catObj.pendingAt;
+    delete catObj.publishedByAdmin;
 
-    if (existingCategory) {
-        return res.status(400).json({ message: "Category already exists" });
-    }
+    return catObj;
+};
 
-    // ✅ Parse faqs
-    const faqs = req.body.faqs ? JSON.parse(req.body.faqs) : [];
+router.post(
+    "/addCategory",
+    upload.single("logo"),
+    errorHandling(async (req, res) => {
 
-    let ancestors = [];
-    if (parentId) {
-        const parentCategory = await Category.findById(parentId);
-        if (!parentCategory) return res.status(404).json({ message: "Parent category not found" });
-        ancestors = [...parentCategory.ancestors, parentCategory._id];
-    }
+        const {
+            category,
+            description,
+            shortDes,
+            parentId,
+            catIndex,
+            metaDes,
+            metaTitle,
+            keywords,
+            catUrl
+        } = req.body;
 
-    let CatImage;
-    if (req.file) {
-        const uploadCatImage = await cloudinary.uploader.upload(req.file.path);
-        CatImage = uploadCatImage.secure_url;
-    }
+        if (!category) {
+            return res.status(400).json({
+                message: "Please select at least category"
+            });
+        }
 
-    const keywordsArray = keywords
-        ? keywords.split(",").map(k => k.trim()).filter(k => k)
-        : [];
+        const existingCategory = await Category.findOne({
+            category: {
+                $regex: new RegExp(`^${category.trim()}$`, "i")
+            }
+        });
 
-    const newCategory = new Category({
-        category, description, shortDes, logo: CatImage, faqs, catIndex, metaDes, metaTitle, parent: parentId || null, ancestors, keywords: keywordsArray, catUrl
-    });
+        if (existingCategory) {
+            return res.status(400).json({
+                message: "Category already exists"
+            });
+        }
 
-    await newCategory.save();
-    res.status(201).json(newCategory);
-}));
+        // FAQs
+        const faqs = req.body.faqs
+            ? JSON.parse(req.body.faqs)
+            : [];
+
+        // Parent + Ancestors
+        let ancestors = [];
+
+        if (parentId) {
+
+            const parentCategory = await Category.findById(parentId);
+
+            if (!parentCategory) {
+                return res.status(404).json({
+                    message: "Parent category not found"
+                });
+            }
+
+            ancestors = [
+                ...parentCategory.ancestors,
+                parentCategory._id
+            ];
+        }
+
+        // Image
+        let CatImage;
+
+        if (req.file) {
+
+            const uploadCatImage =
+                await cloudinary.uploader.upload(req.file.path);
+
+            CatImage = uploadCatImage.secure_url;
+        }
+
+        // Keywords
+        const keywordsArray = keywords
+            ? keywords.split(",")
+                .map(k => k.trim())
+                .filter(k => k)
+            : [];
+
+        const categoryData = {
+            category,
+            description,
+            shortDes,
+            logo: CatImage,
+            faqs,
+            catIndex,
+            metaDes,
+            metaTitle,
+            parent: parentId || null,
+            ancestors,
+            keywords: keywordsArray,
+            catUrl
+        };
+
+        // ==========================
+        // ADMIN DIRECT SAVE
+        // ==========================
+        const user = await User.findById(req.body.role);
+        const isAdmin = user?.role === "Admin";
+
+        if (isAdmin) {
+
+            const newCategory = new Category({
+                ...categoryData,
+                publishedByAdmin: true
+            });
+
+            await newCategory.save();
+
+            return res.status(201).json(
+                removePendingFields(newCategory)
+            );
+        }
+
+        // ==========================
+        // USER PENDING APPROVAL
+        // ==========================
+
+        const newCategory = new Category({
+            category,
+            pendingChanges: categoryData,
+            pendingBy: req.body?.role,
+            pendingAt: new Date(),
+            publishedByAdmin: false
+        });
+
+        await newCategory.save();
+
+        res.status(201).json({
+            message: "Category submitted for admin approval"
+        });
+    })
+);
 
 // GET /api/category
 router.get("/allCategories", async (req, res) => {
@@ -107,19 +213,37 @@ router.put(
     "/updateCategoryById/:id",
     upload.single("logo"),
     errorHandling(async (req, res) => {
-        const { category, description, shortDes, parentId, metaDes, metaTitle, keywords, faqs, catUrl, catIndex } = req.body;
+
+        const {
+            category,
+            description,
+            shortDes,
+            parentId,
+            metaDes,
+            metaTitle,
+            keywords,
+            faqs,
+            catUrl,
+            catIndex
+        } = req.body;
 
         const catId = req.params.id;
 
         const existingCat = await Category.findById(catId);
-        if (!existingCat)
-            return res.status(404).json({ message: "Category not found" });
+
+        if (!existingCat) {
+            return res.status(404).json({
+                message: "Category not found"
+            });
+        }
 
         let updateCategoryData = {};
-        // ✅ Parse faqs
+
+        // FAQs
         if (faqs) {
-            updateCategoryData.faqs = JSON.parse(faqs)
-        };
+            updateCategoryData.faqs = JSON.parse(faqs);
+        }
+
         if (category) updateCategoryData.category = category;
         if (catIndex) updateCategoryData.catIndex = catIndex;
         if (description) updateCategoryData.description = description;
@@ -128,45 +252,151 @@ router.put(
         if (metaTitle) updateCategoryData.metaTitle = metaTitle;
         if (catUrl) updateCategoryData.catUrl = catUrl;
 
-        // ✅ Handle Parent + Ancestors
+        // Parent + Ancestors
         if (parentId !== undefined) {
+
             if (parentId) {
-                const parentCategory = await Category.findById(parentId);
-                if (!parentCategory)
-                    return res.status(404).json({ message: "Parent category not found" });
+
+                const parentCategory =
+                    await Category.findById(parentId);
+
+                if (!parentCategory) {
+
+                    return res.status(404).json({
+                        message: "Parent category not found"
+                    });
+                }
 
                 updateCategoryData.parent = parentId;
+
                 updateCategoryData.ancestors = [
                     ...parentCategory.ancestors,
-                    parentCategory._id,
+                    parentCategory._id
                 ];
+
             } else {
+
                 updateCategoryData.parent = null;
                 updateCategoryData.ancestors = [];
             }
         }
 
-        // ✅ Handle Logo Update
+        // Logo
         if (req.file) {
-            const uploadCatImage = await cloudinary.uploader.upload(req.file.path);
-            updateCategoryData.logo = uploadCatImage.secure_url;
+
+            const uploadCatImage =
+                await cloudinary.uploader.upload(req.file.path);
+
+            updateCategoryData.logo =
+                uploadCatImage.secure_url;
         }
 
-        // ✅ Handle Keywords
+        // Keywords
         if (keywords !== undefined) {
+
             const keywordsArray = keywords
-                ? keywords.split(",").map(k => k.trim()).filter(k => k)
+                ? keywords.split(",")
+                    .map(k => k.trim())
+                    .filter(k => k)
                 : [];
+
             updateCategoryData.keywords = keywordsArray;
         }
 
-        const updatedCategory = await Category.findByIdAndUpdate(
-            catId,
-            { $set: updateCategoryData },
-            { new: true }
-        );
+        // ==========================
+        // ADMIN DIRECT UPDATE
+        // ==========================
+        const user = await User.findById(req.body.role);
+        const isAdmin = user?.role === "Admin";
 
-        res.json(updatedCategory);
+        if (isAdmin) {
+
+            const updatedCategory =
+                await Category.findByIdAndUpdate(
+                    catId,
+                    {
+                        $set: {
+                            ...updateCategoryData,
+                            pendingChanges: null,
+                            pendingBy: null,
+                            pendingAt: null,
+                            publishedByAdmin: true
+                        }
+                    },
+                    { new: true }
+                );
+
+            return res.json(
+                removePendingFields(updatedCategory)
+            );
+        }
+
+        // ==========================
+        // USER PENDING UPDATE
+        // ==========================
+
+        existingCat.pendingChanges = updateCategoryData;
+        existingCat.pendingBy = req.body?.role;
+        existingCat.pendingAt = new Date();
+        existingCat.publishedByAdmin = false
+
+        await existingCat.save();
+
+        res.json({
+            message: "Category update submitted for admin approval"
+        });
+    })
+);
+
+router.put(
+    "/approvePendingCat/:id",
+    errorHandling(async (req, res) => {
+
+        const gameId = req.params.id;
+
+        // =========================
+        // FIND GAME
+        // =========================
+        const existingCat = await Category.findById(gameId);
+
+        if (!existingCat) {
+            return res.status(404).json({
+                message: "Game not found"
+            });
+        }
+
+        // =========================
+        // CHECK PENDING CHANGES
+        // =========================
+        if (!existingCat.pendingChanges) {
+            return res.status(400).json({
+                message: "No pending changes found"
+            });
+        }
+
+        // =========================
+        // APPLY PENDING CHANGES
+        // =========================
+        Object.keys(existingCat.pendingChanges).forEach((key) => {
+            existingCat[key] = existingCat.pendingChanges[key];
+        });
+
+        // =========================
+        // CLEAR PENDING
+        // =========================
+        existingCat.pendingChanges = null;
+        existingCat.pendingBy = null;
+        existingCat.pendingAt = null;
+        existingCat.publishedByAdmin = true;
+
+        await existingCat.save();
+
+        return res.json({
+            success: true,
+            message: "Pending changes approved and published successfully",
+            game: existingCat
+        });
+
     })
 );
 
