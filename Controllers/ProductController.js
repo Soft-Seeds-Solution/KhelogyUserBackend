@@ -566,23 +566,30 @@ router.put(
         // ======================
         const user = await User.findById(req.body.role).populate("role");
 
-        const isAdmin = user?.role?.role === "Admin";
-        const permissions = user?.role?.permissions || [];
+        if (!user || !user.role) {
+            return res.status(401).json({
+                message: "Unauthorized user"
+            });
+        }
 
+        const permissions = user.role.permissions || [];
+
+        const isAdmin = user.role.role === "Admin";
         const isApprovedUser = permissions.includes("approved user");
-        // ✅ ADMIN: DIRECT UPDATE (LIVE CHANGE)
+
+        // ======================
+        // DIRECT UPDATE (ADMIN + APPROVED USER)
+        // ======================
         if (isAdmin || isApprovedUser) {
 
             const updatedGame = await Products.findByIdAndUpdate(
                 gameId,
                 {
                     ...updatedData,
-
-                    // clear pending once approved
                     pendingChanges: null,
-                    publishedByAdmin: true,
                     pendingBy: null,
-                    pendingAt: null
+                    pendingAt: null,
+                    publishedByAdmin: true
                 },
                 { new: true }
             );
@@ -595,10 +602,10 @@ router.put(
         }
 
         // ======================
-        // USER: SAVE AS PENDING ONLY
+        // NORMAL USER → PENDING
         // ======================
         existingGame.pendingChanges = updatedData;
-        existingGame.pendingBy = user.role?.role || null;
+        existingGame.pendingBy = user._id;
         existingGame.pendingAt = new Date();
         existingGame.publishedByAdmin = false;
 
