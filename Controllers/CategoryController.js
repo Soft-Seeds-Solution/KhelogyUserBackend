@@ -115,10 +115,14 @@ router.post(
         // ==========================
         // ADMIN DIRECT SAVE
         // ==========================
-        const user = await User.findById(req.body.role);
-        const isAdmin = user?.role === "Admin";
+        const user = await User.findById(req.body.role).populate("role");
 
-        if (isAdmin) {
+        const isAdmin = user?.role?.role === "Admin";
+        const permissions = user?.role?.permissions || [];
+
+        const isApprovedUser = permissions.includes("approved user");
+        // ✅ ADMIN: DIRECT UPDATE (LIVE CHANGE)
+        if (isAdmin || isApprovedUser) {
 
             const newCategory = new Category({
                 ...categoryData,
@@ -306,10 +310,14 @@ router.put(
         // ==========================
         // ADMIN DIRECT UPDATE
         // ==========================
-        const user = await User.findById(req.body.role);
-        const isAdmin = user?.role === "Admin";
+        const user = await User.findById(req.body.role).populate("role");
 
-        if (isAdmin) {
+        const isAdmin = user?.role?.role === "Admin";
+        const permissions = user?.role?.permissions || [];
+
+        const isApprovedUser = permissions.includes("approved user");
+        // ✅ ADMIN: DIRECT UPDATE (LIVE CHANGE)
+        if (isAdmin || isApprovedUser) {
 
             const updatedCategory =
                 await Category.findByIdAndUpdate(

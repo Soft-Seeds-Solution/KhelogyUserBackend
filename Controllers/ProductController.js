@@ -564,11 +564,14 @@ router.put(
         // ======================
         // ADMIN vs USER LOGIC
         // ======================
-        const user = await User.findById(req.body.role);
-        const isAdmin = user?.role === "Admin";
+        const user = await User.findById(req.body.role).populate("role");
 
+        const isAdmin = user?.role?.role === "Admin";
+        const permissions = user?.role?.permissions || [];
+
+        const isApprovedUser = permissions.includes("approved user");
         // ✅ ADMIN: DIRECT UPDATE (LIVE CHANGE)
-        if (isAdmin) {
+        if (isAdmin || isApprovedUser) {
 
             const updatedGame = await Products.findByIdAndUpdate(
                 gameId,
@@ -595,7 +598,7 @@ router.put(
         // USER: SAVE AS PENDING ONLY
         // ======================
         existingGame.pendingChanges = updatedData;
-        existingGame.pendingBy = user.role || null;
+        existingGame.pendingBy = user.role?.role || null;
         existingGame.pendingAt = new Date();
         existingGame.publishedByAdmin = false;
 
