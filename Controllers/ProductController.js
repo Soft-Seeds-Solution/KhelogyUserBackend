@@ -218,12 +218,7 @@ router.get(
                         b.ancestors.length
                 );
 
-            // REMOVE PENDING DATA
-            const safeGame =
-                removePendingFields(game);
-
             return {
-                ...safeGame,
                 categories: sortedCategories
             };
         });
@@ -665,6 +660,51 @@ router.put(
         return res.json({
             success: true,
             message: "Pending changes approved and published successfully",
+            game: existingGame
+        });
+
+    })
+);
+
+router.put(
+    "/rejectPendingGame/:id",
+    errorHandling(async (req, res) => {
+
+        const gameId = req.params.id;
+
+        // =========================
+        // FIND GAME
+        // =========================
+        const existingGame = await Products.findById(gameId);
+
+        if (!existingGame) {
+            return res.status(404).json({
+                message: "Game not found"
+            });
+        }
+
+        // =========================
+        // CHECK PENDING CHANGES
+        // =========================
+        if (!existingGame.pendingChanges) {
+            return res.status(400).json({
+                message: "No pending changes found"
+            });
+        }
+
+        // =========================
+        // REJECT → ONLY CLEAR PENDING
+        // =========================
+        existingGame.pendingChanges = null;
+        existingGame.pendingBy = null;
+        existingGame.pendingAt = null;
+        existingGame.publishedByAdmin = false;
+
+        await existingGame.save();
+
+        return res.json({
+            success: true,
+            message: "Pending changes rejected successfully",
             game: existingGame
         });
 
