@@ -409,6 +409,51 @@ router.put(
 );
 
 router.put(
+    "/rejectPendingCat/:id",
+    errorHandling(async (req, res) => {
+
+        const gameId = req.params.id;
+
+        // =========================
+        // FIND GAME
+        // =========================
+        const existingCat = await Category.findById(gameId);
+
+        if (!existingCat) {
+            return res.status(404).json({
+                message: "Game not found"
+            });
+        }
+
+        // =========================
+        // CHECK PENDING CHANGES
+        // =========================
+        if (!existingCat.pendingChanges) {
+            return res.status(400).json({
+                message: "No pending changes found"
+            });
+        }
+
+        // =========================
+        // CLEAR PENDING
+        // =========================
+        existingCat.pendingChanges = null;
+        existingCat.pendingBy = null;
+        existingCat.pendingAt = null;
+        existingCat.publishedByAdmin = true;
+
+        await existingCat.save();
+
+        return res.json({
+            success: true,
+            message: "Pending changes approved and published successfully",
+            game: existingCat
+        });
+
+    })
+);
+
+router.put(
     "/updateCatToIndex/:id",
     errorHandling(async (req, res) => {
         const catId = req.params.id;
